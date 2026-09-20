@@ -1,0 +1,32 @@
+// Asks every node which parties it hosts, whether it has the model, and how
+// many contracts it stores.
+
+val nodes = Seq(icsd, centralbank, alpha, bravo, charlie)
+
+println("\n=== Business parties each node hosts (its own keys) ===")
+nodes.foreach { p =>
+  val own = p.parties
+    .hosted()
+    .map(_.party.filterString.takeWhile(_ != ':'))
+    // Skip the node's own admin party.
+    .filterNot(_ == p.name)
+  println(f"  ${p.name}%-12s ${own.mkString(", ")}")
+}
+
+println("\n=== Model on each node ===")
+nodes.foreach { p =>
+  val dars = p.dars.list().map(_.name).filter(_.contains("repo"))
+  println(f"  ${p.name}%-12s ${dars.mkString(", ")}")
+}
+
+println("\n=== Active contracts each node stores ===")
+nodes.foreach { p =>
+  val count = p.ledger_api.state.acs.of_all().size
+  println(f"  ${p.name}%-12s $count")
+}
+
+println("\nA node hosts one party and stores only the contracts that party is a")
+println("stakeholder of. Nothing above is an access check - it is what is in the")
+println("node's own database.\n")
+
+sys.exit(0)

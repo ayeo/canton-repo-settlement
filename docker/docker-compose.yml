@@ -1,0 +1,143 @@
+name: canton-poc
+
+# Every node is the same image, differing only in its configuration file.
+x-canton-node: &canton-node
+  image: canton-poc:${CANTON_VERSION}
+  build:
+    context: .
+    dockerfile: Dockerfile
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment:
+    JAVA_TOOL_OPTIONS: "-Xms128m -Xmx768m -XX:+UseG1GC"
+  volumes:
+    - ../canton/conf:/canton/conf:ro
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: canton-postgres
+    # Seven nodes with several pools each exceed the default 100 connections;
+    # past that a node hangs on startup while its container still reports healthy.
+    command: postgres -c max_connections=300
+    environment:
+      POSTGRES_USER: canton
+      POSTGRES_PASSWORD: canton
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - canton-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canton -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+
+  # Orders events in time. Does not see transaction contents.
+  sequencer:
+    <<: *canton-node
+    container_name: canton-sequencer
+    command: ["daemon", "-c", "/canton/conf/sequencer.conf", "--no-tty"]
+    ports:
+      - "5001:5001"   # public API - participants connect here
+      - "5002:5002"   # admin API - the console connects here
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5002'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # Collects confirmations and announces the outcome. Sees hashes, not contents.
+  mediator:
+    <<: *canton-node
+    container_name: canton-mediator
+    command: ["daemon", "-c", "/canton/conf/mediator.conf", "--no-tty"]
+    ports:
+      - "5003:5003"   # admin API
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5003'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # The depository. Its database holds securities positions and nothing else.
+  icsd:
+    <<: *canton-node
+    container_name: canton-icsd
+    command: ["daemon", "-c", "/canton/conf/icsd.conf", "--no-tty"]
+    ports:
+      - "5011:5011"   # gRPC Ledger API
+      - "7011:7011"   # JSON Ledger API
+      - "5012:5012"   # admin API
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5012'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # The cash settlement agent. Its database holds balances and nothing else.
+  centralbank:
+    <<: *canton-node
+    container_name: canton-centralbank
+    command: ["daemon", "-c", "/canton/conf/centralbank.conf", "--no-tty"]
+    ports:
+      - "5021:5021"
+      - "7021:7021"
+      - "5022:5022"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5022'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # AlphaBank: delivers collateral, takes cash.
+  alpha:
+    <<: *canton-node
+    container_name: canton-alpha
+    command: ["daemon", "-c", "/canton/conf/alpha.conf", "--no-tty"]
+    ports:
+      - "5031:5031"
+      - "7031:7031"
+      - "5032:5032"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5032'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # BravoBank: provides cash, takes collateral.
+  bravo:
+    <<: *canton-node
+    container_name: canton-bravo
+    command: ["daemon", "-c", "/canton/conf/bravo.conf", "--no-tty"]
+    ports:
+      - "5041:5041"
+      - "7041:7041"
+      - "5042:5042"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5042'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # CharlieBank: the second lender, competing for the same offers.
+  charlie:
+    <<: *canton-node
+    container_name: canton-charlie
+    command: ["daemon", "-c", "/canton/conf/charlie.conf", "--no-tty"]
+    ports:
+      - "5051:5051"
+      - "7051:7051"
+      - "5052:5052"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5052'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+volumes:
+  canton-pgdata:
