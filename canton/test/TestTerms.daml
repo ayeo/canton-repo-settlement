@@ -1,0 +1,71 @@
+module TestTerms where
+
+import DA.Assert ((===))
+import DA.Date
+import Daml.Script
+
+import Terms
+
+demoTerms : RepoTerms
+demoTerms = RepoTerms with
+    tradeId = "REPO-0001"
+    isin = "DE0001102580"
+    quantity = 10000000.0
+    price = 98.75
+    haircut = 0.02
+    currency = "EUR"
+    repoRate = 0.0325
+    tradeDate = date 2026 Sep 14
+    purchaseDate = date 2026 Sep 15
+    repurchaseDate = date 2026 Sep 22
+
+testPurchasePriceAppliesHaircutToMarketValue : Script ()
+testPurchasePriceAppliesHaircutToMarketValue = do
+  marketValue demoTerms === 9875000.0
+  purchasePrice demoTerms === 9677500.0
+
+testRepoInterestIsActThreeSixty : Script ()
+testRepoInterestIsActThreeSixty = do
+  termDays demoTerms === 7
+  repoInterest demoTerms === 6115.64
+  repurchasePrice demoTerms === 9683615.64
+
+testZeroRateMeansNoInterest : Script ()
+testZeroRateMeansNoInterest = do
+  let free = demoTerms with repoRate = 0.0
+  repoInterest free === 0.0
+  repurchasePrice free === purchasePrice free
+
+testNegativeRateReducesTheRepurchasePrice : Script ()
+testNegativeRateReducesTheRepurchasePrice = do
+  let negative = demoTerms with repoRate = -0.005
+  repoInterest negative === -940.87
+  repurchasePrice negative === 9676559.13
+  termsAreWellFormed negative === True
+
+testWellFormedTermsAreAccepted : Script ()
+testWellFormedTermsAreAccepted = do
+  termsAreWellFormed demoTerms === True
+
+testMalformedTermsAreRejected : Script ()
+testMalformedTermsAreRejected = do
+  termsAreWellFormed (demoTerms with quantity = 0.0) === False
+  termsAreWellFormed (demoTerms with price = 0.0) === False
+  termsAreWellFormed (demoTerms with haircut = 1.0) === False
+  termsAreWellFormed (demoTerms with haircut = -0.01) === False
+  termsAreWellFormed (demoTerms with isin = "") === False
+  termsAreWellFormed (demoTerms with tradeId = "") === False
+  termsAreWellFormed (demoTerms with currency = "") === False
+
+  termsAreWellFormed (demoTerms with purchaseDate = date 2026 Sep 11) === False
+
+  termsAreWellFormed (demoTerms with repurchaseDate = date 2026 Sep 15) === False
+
+  termsAreWellFormed (demoTerms with repurchaseDate = date 2026 Sep 19) === False
+
+  termsAreWellFormed (demoTerms with repoRate = -100.0) === False
+
+testLegReferencesDiffer : Script ()
+testLegReferencesDiffer = do
+  openingReference demoTerms === "REPO-0001:opening"
+  closingReference demoTerms === "REPO-0001:closing"

@@ -1,0 +1,63 @@
+module Terms where
+
+import DA.Date
+
+import Calendar (isBusinessDay)
+
+data RepoTerms = RepoTerms
+  with
+    tradeId : Text
+    isin : Text
+    quantity : Decimal
+
+    price : Decimal
+
+    haircut : Decimal
+    currency : Text
+
+    repoRate : Decimal
+    tradeDate : Date
+
+    purchaseDate : Date
+
+    repurchaseDate : Date
+  deriving (Eq, Show)
+
+marketValue : RepoTerms -> Decimal
+marketValue terms = terms.quantity * terms.price / 100.0
+
+purchasePrice : RepoTerms -> Decimal
+purchasePrice terms = roundBankers 2 (marketValue terms * (1.0 - terms.haircut))
+
+termDays : RepoTerms -> Int
+termDays terms = subDate terms.repurchaseDate terms.purchaseDate
+
+repoInterest : RepoTerms -> Decimal
+repoInterest terms =
+  roundBankers 2
+    (purchasePrice terms * terms.repoRate * intToDecimal (termDays terms) / 360.0)
+
+repurchasePrice : RepoTerms -> Decimal
+repurchasePrice terms = purchasePrice terms + repoInterest terms
+
+openingReference : RepoTerms -> Text
+openingReference terms = terms.tradeId <> ":opening"
+
+closingReference : RepoTerms -> Text
+closingReference terms = terms.tradeId <> ":closing"
+
+termsAreWellFormed : RepoTerms -> Bool
+termsAreWellFormed terms =
+  terms.tradeId /= ""
+    && terms.isin /= ""
+    && terms.currency /= ""
+    && terms.quantity > 0.0
+    && terms.price > 0.0
+    && terms.haircut >= 0.0
+    && terms.haircut < 1.0
+    && terms.purchaseDate >= terms.tradeDate
+    && terms.repurchaseDate > terms.purchaseDate
+    && isBusinessDay terms.purchaseDate
+    && isBusinessDay terms.repurchaseDate
+    && purchasePrice terms > 0.0
+    && repurchasePrice terms > 0.0

@@ -1,0 +1,172 @@
+module TestOpening where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Cash
+import Custody
+import Fixture
+import Repo
+import Terms
+
+testOpeningLegMovesBothLegs : Script ()
+testOpeningLegMovesBothLegs = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+
+  buyerBonds <- freeBonds m.buyer
+  buyerBonds === 10000000.0
+  sellerBonds' <- freeBonds m.seller
+  sellerBonds' === 0.0
+
+  sellerCash' <- freeCash m.seller
+  sellerCash' === 11677500.0
+  buyerCash' <- freeCash m.buyer
+  buyerCash' === 15322500.0
+
+  Some agreed <- queryContractId m.seller open
+  agreed.terms === standardTerms
+
+testOpeningBeforePurchaseDateRefused : Script ()
+testOpeningBeforePurchaseDateRefused = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+
+  (businessDate, _) <- valueDate m
+
+  [(collateral, _)] <- query @AllocatedSecurity m.seller
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice standardTerms
+      counterparty = m.seller
+      reference = openingReference standardTerms
+  submitMustFail m.buyer do
+    exerciseCmd trade SettleOpening with
+      collateral
+      cash = cash.hold
+      businessDate
+
+testShortPaymentRefusedAndNothingMoves : Script ()
+testShortPaymentRefusedAndNothingMoves = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  businessDate <- openDay m standardTerms.purchaseDate
+
+  [(collateral, _)] <- query @AllocatedSecurity m.seller
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice standardTerms - 0.01
+      counterparty = m.seller
+      reference = openingReference standardTerms
+  submitMustFail m.buyer do
+    exerciseCmd trade SettleOpening with
+      collateral
+      cash = cash.hold
+      businessDate
+
+  buyerBonds <- freeBonds m.buyer
+  buyerBonds === 0.0
+  sellerCash' <- freeCash m.seller
+  sellerCash' === 2000000.0
+  Some standingCollateral <- queryContractId m.seller collateral
+  standingCollateral.quantity === standardTerms.quantity
+  Some standingCash <- queryContractId m.buyer cash.hold
+  standingCash.amount === purchasePrice standardTerms - 0.01
+
+testShortDeliveryRefused : Script ()
+testShortDeliveryRefused = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  businessDate <- openDay m standardTerms.purchaseDate
+
+  extra <- moreBonds m standardTerms.quantity
+  wrong <- submit m.seller do
+    exerciseCmd extra AllocateSecurity with
+      allocated = 9000000.0
+      takenBy = Some m.buyer
+      reference = openingReference standardTerms
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice standardTerms
+      counterparty = m.seller
+      reference = openingReference standardTerms
+  submitMustFail m.buyer do
+    exerciseCmd trade SettleOpening with
+      collateral = wrong.hold
+      cash = cash.hold
+      businessDate
+  buyerBonds <- freeBonds m.buyer
+  buyerBonds === 0.0
+
+testAllocationForAnotherTradeRefused : Script ()
+testAllocationForAnotherTradeRefused = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  businessDate <- openDay m standardTerms.purchaseDate
+
+  extra <- moreBonds m standardTerms.quantity
+  wrong <- submit m.seller do
+    exerciseCmd extra AllocateSecurity with
+      allocated = standardTerms.quantity
+      takenBy = Some m.buyer
+      reference = "REPO-0002:opening"
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice standardTerms
+      counterparty = m.seller
+      reference = openingReference standardTerms
+  submitMustFail m.buyer do
+    exerciseCmd trade SettleOpening with
+      collateral = wrong.hold
+      cash = cash.hold
+      businessDate
+
+testClosingAllocationRefusedOnOpeningLeg : Script ()
+testClosingAllocationRefusedOnOpeningLeg = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  businessDate <- openDay m standardTerms.purchaseDate
+
+  extra <- moreBonds m standardTerms.quantity
+  wrong <- submit m.seller do
+    exerciseCmd extra AllocateSecurity with
+      allocated = standardTerms.quantity
+      takenBy = Some m.buyer
+      reference = closingReference standardTerms
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice standardTerms
+      counterparty = m.seller
+      reference = openingReference standardTerms
+  submitMustFail m.buyer do
+    exerciseCmd trade SettleOpening with
+      collateral = wrong.hold
+      cash = cash.hold
+      businessDate
+
+testSellerCannotSettleOpeningLeg : Script ()
+testSellerCannotSettleOpeningLeg = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  businessDate <- openDay m standardTerms.purchaseDate
+
+  [(collateral, _)] <- query @AllocatedSecurity m.seller
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice standardTerms
+      counterparty = m.seller
+      reference = openingReference standardTerms
+  submitMustFail m.seller do
+    exerciseCmd trade SettleOpening with
+      collateral
+      cash = cash.hold
+      businessDate
+
+testTradeCanBeCancelledBeforeSettlement : Script ()
+testTradeCanBeCancelledBeforeSettlement = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  submitMustFail m.seller do exerciseCmd trade CancelTrade
+  submit (actAs [m.seller, m.buyer]) do exerciseCmd trade CancelTrade
+  gone <- queryContractId m.buyer trade
+  gone === None

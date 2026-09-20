@@ -1,0 +1,106 @@
+module TestLifecycle where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Cash
+import Custody
+import Fixture
+import Repo
+import Terms
+
+testTotalsAreConservedAcrossTheLifeCycle : Script ()
+testTotalsAreConservedAcrossTheLifeCycle = do
+  m <- setupMarket
+  bondsBefore <- totalBonds m
+  bondsBefore === 10000000.0
+  cashBefore <- totalCash m
+  cashBefore === 27000000.0
+
+  open <- openRepo m standardTerms
+  bondsOpen <- totalBonds m
+  bondsOpen === 10000000.0
+  cashOpen <- totalCash m
+  cashOpen === 27000000.0
+
+  closeRepo m standardTerms open
+  bondsAfter <- totalBonds m
+  bondsAfter === 10000000.0
+  cashAfter <- totalCash m
+  cashAfter === 27000000.0
+
+testDepositorySeesNoCash : Script ()
+testDepositorySeesNoCash = do
+  m <- setupMarket
+  _ <- openRepo m standardTerms
+
+  balances <- query @CashBalance m.icsd
+  balances === []
+  holds <- query @AllocatedCash m.icsd
+  holds === []
+
+  positions <- query @SecurityPosition m.icsd
+  map (\(_, position) -> (position.owner, position.quantity)) positions
+    === [(m.buyer, 10000000.0)]
+
+testCentralBankSeesNoSecurities : Script ()
+testCentralBankSeesNoSecurities = do
+  m <- setupMarket
+  _ <- openRepo m standardTerms
+  positions <- query @SecurityPosition m.centralBank
+  positions === []
+  holds <- query @AllocatedSecurity m.centralBank
+  holds === []
+
+testInfrastructureNeverSeesTheTerms : Script ()
+testInfrastructureNeverSeesTheTerms = do
+  m <- setupMarket
+  _ <- openRepo m standardTerms
+
+  icsdTrades <- query @RepoTrade m.icsd
+  icsdTrades === []
+  icsdOpen <- query @OpenRepo m.icsd
+  icsdOpen === []
+  icsdPolicies <- query @CollateralPolicy m.icsd
+  icsdPolicies === []
+
+  cbTrades <- query @RepoTrade m.centralBank
+  cbTrades === []
+  cbOpen <- query @OpenRepo m.centralBank
+  cbOpen === []
+  cbPolicies <- query @CollateralPolicy m.centralBank
+  cbPolicies === []
+
+testBanksSeeOnlyTheirOwnHoldings : Script ()
+testBanksSeeOnlyTheirOwnHoldings = do
+  m <- setupMarket
+  _ <- openRepo m standardTerms
+
+  sellerCash' <- query @CashBalance m.seller
+  map (\(_, balance) -> balance.owner) sellerCash' === [m.seller, m.seller]
+
+  buyerCash' <- query @CashBalance m.buyer
+  map (\(_, balance) -> balance.owner) buyerCash' === [m.buyer]
+
+  buyerBonds <- query @SecurityPosition m.buyer
+  map (\(_, position) -> position.owner) buyerBonds === [m.buyer]
+
+testDemoFiguresEndToEnd : Script ()
+testDemoFiguresEndToEnd = do
+  marketValue standardTerms === 9875000.0
+  purchasePrice standardTerms === 9677500.0
+  repoInterest standardTerms === 6115.64
+  repurchasePrice standardTerms === 9683615.64
+
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  sellerCash' <- freeCash m.seller
+  sellerCash' === 11677500.0
+  buyerBonds <- freeBonds m.buyer
+  buyerBonds === 10000000.0
+
+  closeRepo m standardTerms open
+  buyerCash' <- freeCash m.buyer
+  buyerCash' === 25006115.64
+  sellerBonds' <- freeBonds m.seller
+  sellerBonds' === 10000000.0

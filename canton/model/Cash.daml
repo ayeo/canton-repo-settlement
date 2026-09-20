@@ -1,0 +1,71 @@
+module Cash where
+
+template CashBalance
+  with
+    centralBank : Party
+    owner : Party
+    currency : Text
+    amount : Decimal
+  where
+    signatory centralBank
+    observer owner
+
+    ensure amount > 0.0 && currency /= ""
+
+    choice AllocateCash : CashAllocation
+      with
+        allocated : Decimal
+        counterparty : Party
+        reference : Text
+      controller owner
+      do
+        assertMsg "allocated amount must be positive" (allocated > 0.0)
+        assertMsg "cannot allocate more than the balance holds" (allocated <= amount)
+        assertMsg "the counterparty must be someone else" (counterparty /= owner)
+        assertMsg "an allocation must name the instruction it serves" (reference /= "")
+        hold <- create AllocatedCash with
+          centralBank, owner, counterparty, currency, amount = allocated, reference
+        remainder <-
+          if amount > allocated
+            then Some <$> create this with amount = amount - allocated
+            else pure None
+        pure CashAllocation with hold, remainder
+
+    choice MergeCash : ContractId CashBalance
+      with
+        other : ContractId CashBalance
+      controller owner
+      do
+        that <- fetch other
+        assertMsg "cannot merge balances of different owners" (that.owner == owner && that.centralBank == centralBank)
+        assertMsg "cannot merge different currencies" (that.currency == currency)
+        archive other
+        create this with amount = amount + that.amount
+
+data CashAllocation = CashAllocation
+  with
+    hold : ContractId AllocatedCash
+    remainder : Optional (ContractId CashBalance)
+  deriving (Eq, Show)
+
+template AllocatedCash
+  with
+    centralBank : Party
+    owner : Party
+    counterparty : Party
+    currency : Text
+    amount : Decimal
+    reference : Text
+  where
+    signatory centralBank, owner
+    observer counterparty
+
+    ensure amount > 0.0
+
+    choice PayCash : ContractId CashBalance
+      controller owner, counterparty
+      do create CashBalance with centralBank, owner = counterparty, currency, amount
+
+    choice ReleaseCash : ContractId CashBalance
+      controller owner
+      do create CashBalance with centralBank, owner, currency, amount

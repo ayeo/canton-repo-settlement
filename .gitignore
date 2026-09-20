@@ -1,0 +1,33 @@
+# Daml build output
+.daml/
+
+# Maven build output, including generated Java sources
+target/
+
+# Canton node logs
+log/
+
+# Canton jar copied into the Docker build context (294 MB)
+docker/canton.jar
+
+# Canton release tarball, kept so "make clean" need not re-download it
+.cache/
+
+# Produced by canton/bootstrap.canton on every bootstrap
+ledger.properties
+
+# Produced by the shade plugin when it builds the command line.
+app/dependency-reduced-pom.xml
+
+# The command line remembers what the ledger refused.
+.repo-refusals.log
+
+# The trace data is a snapshot of whatever last ran, not source.
+web/trace.json
+
+# What one bank handed another off the ledger: explicit disclosures.
+.repo-courier/
+
+# Editor and OS droppings.
+*.swp
+.DS_Store

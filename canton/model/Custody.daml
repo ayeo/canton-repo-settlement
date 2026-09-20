@@ -1,0 +1,117 @@
+module Custody where
+
+template Instrument
+  with
+    icsd : Party
+    isin : Text
+    issuer : Text
+    currency : Text
+
+    price : Decimal
+    observers : [Party]
+  where
+    signatory icsd
+    observer observers
+
+    ensure isin /= "" && issuer /= "" && price > 0.0
+
+    choice Reprice : ContractId Instrument
+      with
+        newPrice : Decimal
+      controller icsd
+      do
+        assertMsg "a price is positive" (newPrice > 0.0)
+        create this with price = newPrice
+
+    nonconsuming choice Issue : ContractId SecurityPosition
+      with
+        owner : Party
+        quantity : Decimal
+      controller icsd
+      do
+        assertMsg "issued quantity must be positive" (quantity > 0.0)
+        create SecurityPosition with icsd, owner, isin, quantity
+
+template SecurityPosition
+  with
+    icsd : Party
+    owner : Party
+    isin : Text
+    quantity : Decimal
+  where
+    signatory icsd
+    observer owner
+
+    ensure quantity > 0.0
+
+    choice AllocateSecurity : SecurityAllocation
+      with
+        allocated : Decimal
+        takenBy : Optional Party
+        reference : Text
+      controller owner
+      do
+        assertMsg "allocated quantity must be positive" (allocated > 0.0)
+        assertMsg "cannot allocate more than the position holds" (allocated <= quantity)
+        assertMsg "the owner cannot be its own counterparty" (takenBy /= Some owner)
+        assertMsg "an allocation must name the instruction it serves" (reference /= "")
+        hold <- create AllocatedSecurity with
+          icsd, owner, takenBy, isin, quantity = allocated, reference
+        remainder <-
+          if quantity > allocated
+            then Some <$> create this with quantity = quantity - allocated
+            else pure None
+        pure SecurityAllocation with hold, remainder
+
+    choice MergeSecurity : ContractId SecurityPosition
+      with
+        other : ContractId SecurityPosition
+      controller owner
+      do
+        that <- fetch other
+        assertMsg "cannot merge holdings of different owners"
+          (that.owner == owner && that.icsd == icsd)
+        assertMsg "cannot merge different instruments" (that.isin == isin)
+        archive other
+        create this with quantity = quantity + that.quantity
+
+data SecurityAllocation = SecurityAllocation
+  with
+    hold : ContractId AllocatedSecurity
+    remainder : Optional (ContractId SecurityPosition)
+  deriving (Eq, Show)
+
+template AllocatedSecurity
+  with
+    icsd : Party
+    owner : Party
+    takenBy : Optional Party
+    isin : Text
+    quantity : Decimal
+    reference : Text
+  where
+    signatory icsd, owner
+    observer takenBy
+
+    ensure quantity > 0.0
+
+    choice DeliverSecurity : ContractId SecurityPosition
+      with
+        newOwner : Party
+      controller owner, newOwner
+      do
+        assertMsg "this hold was not assigned to you" (takenBy == Some newOwner)
+        create SecurityPosition with icsd, owner = newOwner, isin, quantity
+
+    choice AssignSecurity : ContractId AllocatedSecurity
+      with
+        taker : Party
+      controller owner
+      do
+        assertMsg "that hold has already been taken" (takenBy == None)
+        assertMsg "the owner cannot take its own hold" (taker /= owner)
+        create this with takenBy = Some taker
+
+    choice ReleaseSecurity : ContractId SecurityPosition
+      controller owner
+      do create SecurityPosition with icsd, owner, isin, quantity

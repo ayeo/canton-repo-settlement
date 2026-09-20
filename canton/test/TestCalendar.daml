@@ -1,0 +1,70 @@
+module TestCalendar where
+
+import DA.Assert ((===))
+import DA.Date
+import Daml.Script
+
+import Calendar
+
+testWeekendsAreNotBusinessDays : Script ()
+testWeekendsAreNotBusinessDays = do
+  isBusinessDay (date 2026 Sep 18) === True
+  isBusinessDay (date 2026 Sep 19) === False
+  isBusinessDay (date 2026 Sep 20) === False
+  isBusinessDay (date 2026 Sep 21) === True
+
+testNextBusinessDaySkipsTheWeekend : Script ()
+testNextBusinessDaySkipsTheWeekend = do
+  nextBusinessDay (date 2026 Sep 18) === date 2026 Sep 21
+  nextBusinessDay (date 2026 Sep 21) === date 2026 Sep 22
+  nextBusinessDay (date 2026 Sep 19) === date 2026 Sep 21
+
+data Market' = Market' with
+    operator : Party
+    bank : Party
+    valueDate : ContractId BusinessDate
+
+setup : Script Market'
+setup = do
+  operator <- allocateParty "CentralBank"
+  bank <- allocateParty "AlphaBank"
+  valueDate <- submit operator do
+    createCmd BusinessDate with
+      operator, current = date 2026 Sep 14, observers = [bank]
+  pure Market' with ..
+
+testOperatorRollsTheDateForward : Script ()
+testOperatorRollsTheDateForward = do
+  Market'{..} <- setup
+  rolled <- submit operator do
+    exerciseCmd valueDate RollBusinessDate with next = date 2026 Sep 15
+  Some opened <- queryContractId bank rolled
+  opened.current === date 2026 Sep 15
+  stale <- queryContractId bank valueDate
+  stale === None
+
+testBankCannotRollTheDate : Script ()
+testBankCannotRollTheDate = do
+  Market'{..} <- setup
+  submitMustFail bank do
+    exerciseCmd valueDate RollBusinessDate with next = date 2026 Sep 15
+
+testDateOnlyMovesForward : Script ()
+testDateOnlyMovesForward = do
+  Market'{..} <- setup
+  submitMustFail operator do
+    exerciseCmd valueDate RollBusinessDate with next = date 2026 Sep 11
+  submitMustFail operator do
+    exerciseCmd valueDate RollBusinessDate with next = date 2026 Sep 14
+
+testCannotOpenAWeekend : Script ()
+testCannotOpenAWeekend = do
+  Market'{..} <- setup
+  submitMustFail operator do
+    exerciseCmd valueDate RollBusinessDate with next = date 2026 Sep 19
+
+testParticipantsSeeTheDate : Script ()
+testParticipantsSeeTheDate = do
+  Market'{..} <- setup
+  visible <- query @BusinessDate bank
+  map (\(_, bd) -> bd.current) visible === [date 2026 Sep 14]

@@ -1,0 +1,150 @@
+module TestCustody where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Custody
+
+data Registry = Registry with
+    icsd : Party
+    seller : Party
+    buyer : Party
+    bond : ContractId Instrument
+
+setupRegistry : Script Registry
+setupRegistry = do
+  icsd <- allocateParty "ICSD"
+  seller <- allocateParty "AlphaBank"
+  buyer <- allocateParty "BravoBank"
+  bond <- submit icsd do
+    createCmd Instrument with
+      icsd
+      isin = "DE0001102580"
+      issuer = "Federal Republic of Germany"
+      currency = "EUR"
+      price = 98.75
+      observers = [seller, buyer]
+  pure Registry with ..
+
+testIssueCreatesPosition : Script ()
+testIssueCreatesPosition = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  Some held <- queryContractId seller position
+  held.owner === seller
+  held.quantity === 10000000.0
+  held.isin === "DE0001102580"
+
+testBankCannotCreatePosition : Script ()
+testBankCannotCreatePosition = do
+  Registry{..} <- setupRegistry
+  submitMustFail seller do
+    createCmd SecurityPosition with
+      icsd, owner = seller, isin = "DE0001102580", quantity = 1.0
+
+testAllocationSplitsPosition : Script ()
+testAllocationSplitsPosition = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  result <- submit seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 4000000.0
+      takenBy = Some buyer
+      reference = "REPO-0001:opening"
+  Some hold <- queryContractId seller result.hold
+  hold.quantity === 4000000.0
+  hold.takenBy === Some buyer
+  Some remainderCid <- pure result.remainder
+  Some remainder <- queryContractId seller remainderCid
+  remainder.quantity === 6000000.0
+
+  stale <- queryContractId seller position
+  stale === None
+
+testFullAllocationLeavesNoRemainder : Script ()
+testFullAllocationLeavesNoRemainder = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  result <- submit seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 10000000.0
+      takenBy = Some buyer
+      reference = "REPO-0001:opening"
+  result.remainder === None
+
+testCannotAllocateMoreThanHeld : Script ()
+testCannotAllocateMoreThanHeld = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  submitMustFail seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 10000000.01
+      takenBy = Some buyer
+      reference = "REPO-0001:opening"
+
+testCannotAllocateTwice : Script ()
+testCannotAllocateTwice = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  _ <- submit seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 6000000.0
+      takenBy = Some buyer
+      reference = "REPO-0001:opening"
+  submitMustFail seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 6000000.0
+      takenBy = Some buyer
+      reference = "REPO-0002:opening"
+
+testDeliveryNeedsBothParties : Script ()
+testDeliveryNeedsBothParties = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  result <- submit seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 10000000.0
+      takenBy = Some buyer
+      reference = "REPO-0001:opening"
+  submitMustFail seller do exerciseCmd result.hold DeliverSecurity with newOwner = buyer
+  submitMustFail buyer do exerciseCmd result.hold DeliverSecurity with newOwner = buyer
+  delivered <- submit (actAs [seller, buyer]) do
+    exerciseCmd result.hold DeliverSecurity with newOwner = buyer
+  Some position' <- queryContractId buyer delivered
+  position'.owner === buyer
+  position'.quantity === 10000000.0
+
+testReleaseReturnsTheAsset : Script ()
+testReleaseReturnsTheAsset = do
+  Registry{..} <- setupRegistry
+  position <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+  result <- submit seller do
+    exerciseCmd position AllocateSecurity with
+      allocated = 10000000.0
+      takenBy = Some buyer
+      reference = "REPO-0001:opening"
+  returned <- submit seller do exerciseCmd result.hold ReleaseSecurity
+  Some free <- queryContractId seller returned
+  free.owner === seller
+  free.quantity === 10000000.0
+
+testMergeCombinesPositions : Script ()
+testMergeCombinesPositions = do
+  Registry{..} <- setupRegistry
+  first <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 4000000.0
+  second <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 6000000.0
+  merged <- submit seller do
+    exerciseCmd first MergeSecurity with other = second
+  Some position <- queryContractId seller merged
+  position.quantity === 10000000.0
+  gone <- queryContractId seller second
+  gone === None

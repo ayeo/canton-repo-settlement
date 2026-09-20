@@ -1,0 +1,102 @@
+module TestCash where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Cash
+
+data Accounts = Accounts with
+    centralBank : Party
+    seller : Party
+    buyer : Party
+
+setupAccounts : Script Accounts
+setupAccounts = do
+  centralBank <- allocateParty "CentralBank"
+  seller <- allocateParty "AlphaBank"
+  buyer <- allocateParty "BravoBank"
+  pure Accounts with ..
+
+fund : Accounts -> Party -> Decimal -> Script (ContractId CashBalance)
+fund Accounts{..} owner amount = submit centralBank do
+  createCmd CashBalance with centralBank, owner, currency = "EUR", amount
+
+testBankCannotCreateBalance : Script ()
+testBankCannotCreateBalance = do
+  Accounts{..} <- setupAccounts
+  submitMustFail buyer do
+    createCmd CashBalance with centralBank, owner = buyer, currency = "EUR", amount = 1.0
+
+testAllocationSplitsBalance : Script ()
+testAllocationSplitsBalance = do
+  accounts@Accounts{..} <- setupAccounts
+  balance <- fund accounts buyer 25000000.0
+  result <- submit buyer do
+    exerciseCmd balance AllocateCash with
+      allocated = 9677500.0
+      counterparty = seller
+      reference = "REPO-0001:opening"
+  Some hold <- queryContractId buyer result.hold
+  hold.amount === 9677500.0
+  hold.counterparty === seller
+  Some remainderCid <- pure result.remainder
+  Some remainder <- queryContractId buyer remainderCid
+  remainder.amount === 15322500.0
+
+testCannotAllocateMoreThanHeld : Script ()
+testCannotAllocateMoreThanHeld = do
+  accounts@Accounts{..} <- setupAccounts
+  balance <- fund accounts buyer 100.0
+  submitMustFail buyer do
+    exerciseCmd balance AllocateCash with
+      allocated = 100.01
+      counterparty = seller
+      reference = "REPO-0001:opening"
+
+testPaymentNeedsBothParties : Script ()
+testPaymentNeedsBothParties = do
+  accounts@Accounts{..} <- setupAccounts
+  balance <- fund accounts buyer 9677500.0
+  result <- submit buyer do
+    exerciseCmd balance AllocateCash with
+      allocated = 9677500.0
+      counterparty = seller
+      reference = "REPO-0001:opening"
+  submitMustFail buyer do exerciseCmd result.hold PayCash
+  submitMustFail seller do exerciseCmd result.hold PayCash
+  paid <- submit (actAs [buyer, seller]) do exerciseCmd result.hold PayCash
+  Some received <- queryContractId seller paid
+  received.owner === seller
+  received.amount === 9677500.0
+
+testReleaseReturnsTheMoney : Script ()
+testReleaseReturnsTheMoney = do
+  accounts@Accounts{..} <- setupAccounts
+  balance <- fund accounts buyer 500.0
+  result <- submit buyer do
+    exerciseCmd balance AllocateCash with
+      allocated = 500.0
+      counterparty = seller
+      reference = "REPO-0001:opening"
+  returned <- submit buyer do exerciseCmd result.hold ReleaseCash
+  Some free <- queryContractId buyer returned
+  free.amount === 500.0
+
+testMergeCombinesBalances : Script ()
+testMergeCombinesBalances = do
+  accounts@Accounts{..} <- setupAccounts
+  first <- fund accounts seller 2000000.0
+  second <- fund accounts seller 9677500.0
+  merged <- submit seller do exerciseCmd first MergeCash with other = second
+  Some balance <- queryContractId seller merged
+  balance.amount === 11677500.0
+  gone <- queryContractId seller second
+  gone === None
+
+testCannotMergeDifferentCurrencies : Script ()
+testCannotMergeDifferentCurrencies = do
+  accounts@Accounts{..} <- setupAccounts
+  euros <- fund accounts seller 100.0
+  dollars <- submit centralBank do
+    createCmd CashBalance with centralBank, owner = seller, currency = "USD", amount = 100.0
+  submitMustFail seller do exerciseCmd euros MergeCash with other = dollars

@@ -1,0 +1,15 @@
+sdk-version: 3.4.11
+name: repo-model
+source: .
+version: 0.1.0
+
+# Deliberately without daml-script: this is the only artifact that reaches the ledger.
+dependencies:
+  - daml-prim
+  - daml-stdlib
+
+# Java classes for templates and choices, consumed by the applications in app/.
+codegen:
+  java:
+    package-prefix: pl.ayeo.repo.model
+    output-directory: ../../app/target/generated-sources/repo

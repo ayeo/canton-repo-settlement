@@ -1,0 +1,34 @@
+module Calendar where
+
+import DA.Date
+
+isBusinessDay : Date -> Bool
+isBusinessDay day = case dayOfWeek day of
+  Saturday -> False
+  Sunday -> False
+  _ -> True
+
+nextBusinessDay : Date -> Date
+nextBusinessDay day =
+  let candidate = addDays day 1
+  in if isBusinessDay candidate then candidate else nextBusinessDay candidate
+
+template BusinessDate
+  with
+    operator : Party
+    current : Date
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure isBusinessDay current
+
+    choice RollBusinessDate : ContractId BusinessDate
+      with
+        next : Date
+      controller operator
+      do
+        assertMsg "the settlement day only moves forward" (next > current)
+        assertMsg "a settlement day cannot fall on a weekend" (isBusinessDay next)
+        create this with current = next

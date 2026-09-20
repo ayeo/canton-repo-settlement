@@ -1,0 +1,240 @@
+module TestProposal where
+
+import DA.Assert ((===))
+import DA.Date
+import Daml.Script
+
+import Custody
+import Fixture
+import Repo
+import Terms
+
+testAcceptCreatesTrade : Script ()
+testAcceptCreatesTrade = do
+  m <- setupMarket
+  trade <- agreeTrade m standardTerms
+  Some agreed <- queryContractId m.seller trade
+  agreed.terms === standardTerms
+  agreed.seller === m.seller
+  agreed.buyer === m.buyer
+
+testSellerCannotAcceptOwnProposal : Script ()
+testSellerCannotAcceptOwnProposal = do
+  m <- setupMarket
+  policy <- publishPolicy m
+  offer <- quote m standardTerms m.buyer
+  submitMustFail m.seller do exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testIneligibleInstrumentRefused : Script ()
+testIneligibleInstrumentRefused = do
+  m <- setupMarket
+  policy <- publishPolicy m
+  offer <- quote m (standardTerms with isin = "IT0005441883") m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testPriceNotTheDepositorysRefused : Script ()
+testPriceNotTheDepositorysRefused = do
+  m <- setupMarket
+  policy <- publishPolicy m
+  offer <- quote m (standardTerms with price = 120.0) m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testQuoteAtTheRepricedLevelIsTaken : Script ()
+testQuoteAtTheRepricedLevelIsTaken = do
+  m <- setupMarket
+  policy <- publishPolicy m
+  repriced <- submit m.icsd do exerciseCmd m.bond Reprice with newPrice = 97.5
+  offer <- quote m (standardTerms with price = 97.5) m.buyer
+  shown <- holdBehind m offer
+  _ <- submit (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = repriced
+  pure ()
+
+testHaircutBelowPolicyMinimumRefused : Script ()
+testHaircutBelowPolicyMinimumRefused = do
+  m <- setupMarket
+  policy <- publishPolicy m
+  offer <- quote m (standardTerms with haircut = 0.01) m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testQuantityAbovePolicyLimitRefused : Script ()
+testQuantityAbovePolicyLimitRefused = do
+  m <- setupMarket
+  policy <- submit m.buyer do
+    createCmd CollateralPolicy with
+      buyer = m.buyer, sellers = [m.seller], icsd = m.icsd, centralBank = m.centralBank
+      currency = "EUR"
+      indicativeRate = 0.0325
+      maxCashAmount = 20000000.0
+      validUntil = date 2026 Dec 31
+      eligible =
+        [EligibleCollateral with isin = demoIsin, minHaircut = 0.02, maxQuantity = 5000000.0]
+  offer <- quote m standardTerms m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testPurchasePriceAbovePolicyCashLimitRefused : Script ()
+testPurchasePriceAbovePolicyCashLimitRefused = do
+  m <- setupMarket
+  policy <- submit m.buyer do
+    createCmd CollateralPolicy with
+      buyer = m.buyer, sellers = [m.seller], icsd = m.icsd, centralBank = m.centralBank
+      currency = "EUR"
+      indicativeRate = 0.0325
+      maxCashAmount = 1000000.0
+      validUntil = date 2026 Dec 31
+      eligible =
+        [EligibleCollateral with isin = demoIsin, minHaircut = 0.02, maxQuantity = 20000000.0]
+  offer <- quote m standardTerms m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testWrongCurrencyRefused : Script ()
+testWrongCurrencyRefused = do
+  m <- setupMarket
+  policy <- publishPolicy m
+  offer <- quote m (standardTerms with currency = "USD") m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testExpiredPolicyRefused : Script ()
+testExpiredPolicyRefused = do
+  m <- setupMarket
+  policy <- submit m.buyer do
+    createCmd CollateralPolicy with
+      buyer = m.buyer, sellers = [m.seller], icsd = m.icsd, centralBank = m.centralBank
+      currency = "EUR"
+      indicativeRate = 0.0325
+      maxCashAmount = 20000000.0
+      validUntil = date 2026 Sep 10
+      eligible =
+        [EligibleCollateral with isin = demoIsin, minHaircut = 0.02, maxQuantity = 20000000.0]
+  offer <- quote m standardTerms m.buyer
+  shown <- holdBehind m offer
+  submitMustFail (actAs m.buyer <> disclose shown) do
+    exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+
+testMalformedTermsCannotBeProposed : Script ()
+testMalformedTermsCannotBeProposed = do
+  m <- setupMarket
+  let saturday = standardTerms with repurchaseDate = date 2026 Sep 19
+  committed <- submit m.seller do
+    exerciseCmd m.sellerBonds AllocateSecurity with
+      allocated = saturday.quantity
+      takenBy = None
+      reference = openingReference saturday
+  submitMustFail m.seller do
+    createCmd RepoProposal with
+      seller = m.seller, lender = m.buyer, icsd = m.icsd
+      centralBank = m.centralBank, terms = saturday, collateral = committed.hold
+
+testWithdrawArchivesTheProposal : Script ()
+testWithdrawArchivesTheProposal = do
+  m <- setupMarket
+  offer <- quote m standardTerms m.buyer
+  submit m.seller do exerciseCmd offer WithdrawProposal
+  gone <- queryContractId m.buyer offer
+  gone === None
+
+data Contest = Contest
+  with
+    other : Party
+    policyHere : ContractId CollateralPolicy
+    policyThere : ContractId CollateralPolicy
+    hold : ContractId AllocatedSecurity
+    offerToUs : ContractId RepoProposal
+    offerToThem : ContractId RepoProposal
+
+quoteToBoth : Market -> Script Contest
+quoteToBoth m = do
+  other <- allocateParty "CharlieBank"
+  policyHere <- publishPolicy m
+  policyThere <- submit other do
+    createCmd CollateralPolicy with
+      buyer = other, sellers = [m.seller], icsd = m.icsd, centralBank = m.centralBank
+      currency = "EUR"
+      indicativeRate = 0.0325
+      maxCashAmount = 20000000.0
+      validUntil = date 2026 Dec 31
+      eligible =
+        [EligibleCollateral with isin = demoIsin, minHaircut = 0.02, maxQuantity = 20000000.0]
+  committed <- submit m.seller do
+    exerciseCmd m.sellerBonds AllocateSecurity with
+      allocated = standardTerms.quantity
+      takenBy = None
+      reference = openingReference standardTerms
+  offerToUs <- submit m.seller do
+    createCmd RepoProposal with
+      seller = m.seller, lender = m.buyer, icsd = m.icsd
+      centralBank = m.centralBank, terms = standardTerms, collateral = committed.hold
+  offerToThem <- submit m.seller do
+    createCmd RepoProposal with
+      seller = m.seller, lender = other, icsd = m.icsd
+      centralBank = m.centralBank, terms = standardTerms, collateral = committed.hold
+  pure Contest with
+    other, policyHere, policyThere, hold = committed.hold, offerToUs, offerToThem
+
+testOneHoldCannotBackTwoAgreements : Script ()
+testOneHoldCannotBackTwoAgreements = do
+  m <- setupMarket
+  c <- quoteToBoth m
+  Some shown <- queryDisclosure m.seller c.hold
+
+  _ <- submit (actAs m.buyer <> disclose shown) do
+    exerciseCmd c.offerToUs AcceptProposal with policy = c.policyHere, instrument = m.bond
+  submitMustFail (actAs c.other <> disclose shown) do
+    exerciseCmd c.offerToThem AcceptProposal with policy = c.policyThere, instrument = m.bond
+
+  noTrades <- query @RepoTrade c.other
+  noTrades === []
+
+testAContestedHoldIsShownToNobody : Script ()
+testAContestedHoldIsShownToNobody = do
+  m <- setupMarket
+  c <- quoteToBoth m
+  seenByUs <- queryContractId m.buyer c.hold
+  seenByThem <- queryContractId c.other c.hold
+  seenByUs === None
+  seenByThem === None
+
+testTakingAContestedQuoteNeedsTheDisclosure : Script ()
+testTakingAContestedQuoteNeedsTheDisclosure = do
+  m <- setupMarket
+  c <- quoteToBoth m
+  submitMustFail m.buyer do
+    exerciseCmd c.offerToUs AcceptProposal with policy = c.policyHere, instrument = m.bond
+  Some shown <- queryDisclosure m.seller c.hold
+  _ <- submit (actAs m.buyer <> disclose shown) do
+    exerciseCmd c.offerToUs AcceptProposal with policy = c.policyHere, instrument = m.bond
+  pure ()
+
+testTheWinnerSeesTheNarrowedHold : Script ()
+testTheWinnerSeesTheNarrowedHold = do
+  m <- setupMarket
+  c <- quoteToBoth m
+  Some shown <- queryDisclosure m.seller c.hold
+  _ <- submit (actAs m.buyer <> disclose shown) do
+    exerciseCmd c.offerToUs AcceptProposal with policy = c.policyHere, instrument = m.bond
+  ours <- query @AllocatedSecurity m.buyer
+  theirs <- query @AllocatedSecurity c.other
+  map (\(_, hold) -> hold.takenBy) ours === [Some m.buyer]
+  theirs === []
+
+testOutsiderCannotSeeOrTakeAnOffer : Script ()
+testOutsiderCannotSeeOrTakeAnOffer = do
+  m <- setupMarket
+  outsider <- allocateParty "CharlieBank"
+  policy <- publishPolicy m
+  offer <- quote m standardTerms m.buyer
+  submitMustFail outsider do exerciseCmd offer AcceptProposal with policy, instrument = m.bond
+  invisible <- query @RepoProposal outsider
+  invisible === []

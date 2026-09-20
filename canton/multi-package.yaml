@@ -1,0 +1,5 @@
+# The model must not depend on daml-script, or the test library is uploaded to
+# every participant with it - so the tests are a separate package.
+packages:
+  - ./model
+  - ./test

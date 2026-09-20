@@ -1,0 +1,214 @@
+module Repo where
+
+import Calendar
+
+import Cash
+import Custody
+import Terms
+
+data EligibleCollateral = EligibleCollateral
+  with
+    isin : Text
+    minHaircut : Decimal
+    maxQuantity : Decimal
+  deriving (Eq, Show)
+
+template CollateralPolicy
+  with
+    buyer : Party
+    sellers : [Party]
+    icsd : Party
+    centralBank : Party
+    currency : Text
+    indicativeRate : Decimal
+    maxCashAmount : Decimal
+    validUntil : Date
+    eligible : [EligibleCollateral]
+  where
+    signatory buyer
+    observer sellers
+
+    ensure currency /= "" && maxCashAmount > 0.0 && not (null eligible) && not (null sellers)
+
+    choice WithdrawPolicy : ()
+      controller buyer
+      do pure ()
+
+assertEligible : CollateralPolicy -> RepoTerms -> Update ()
+assertEligible policy terms = do
+  assertMsg "the terms are not well formed" (termsAreWellFormed terms)
+  assertMsg "currency does not match the policy" (terms.currency == policy.currency)
+  assertMsg "the policy had expired by the purchase date"
+    (terms.purchaseDate <= policy.validUntil)
+  case find (\entry -> entry.isin == terms.isin) policy.eligible of
+    None -> abort (terms.isin <> " is not eligible collateral under this policy")
+    Some entry -> do
+      assertMsg "haircut is below the policy minimum" (terms.haircut >= entry.minHaircut)
+      assertMsg "quantity exceeds the policy limit" (terms.quantity <= entry.maxQuantity)
+  assertMsg "purchase price exceeds the policy cash limit"
+    (purchasePrice terms <= policy.maxCashAmount)
+
+template RepoProposal
+  with
+    seller : Party
+    lender : Party
+    icsd : Party
+    centralBank : Party
+    terms : RepoTerms
+    collateral : ContractId AllocatedSecurity
+  where
+    signatory seller
+    observer lender
+
+    ensure termsAreWellFormed terms
+
+    choice AcceptProposal : ContractId RepoTrade
+      with
+        policy : ContractId CollateralPolicy
+        instrument : ContractId Instrument
+      controller lender
+      do
+
+        hold <- fetch collateral
+        assertMsg "the collateral does not match the terms"
+          (hold.isin == terms.isin && hold.quantity == terms.quantity)
+        assertMsg "the collateral is not the seller's"
+          (hold.owner == seller && hold.icsd == icsd)
+        assertMsg "the collateral was committed to another instruction"
+          (hold.reference == openingReference terms)
+        _ <- exercise collateral AssignSecurity with taker = lender
+
+        schedule <- fetch policy
+        assertMsg "that policy is not published to this dealer"
+          (schedule.buyer == lender && seller `elem` schedule.sellers)
+        assertMsg "that policy names different infrastructure"
+          (schedule.icsd == icsd && schedule.centralBank == centralBank)
+
+        listed <- fetch instrument
+        assertMsg "that instrument is another depository's" (listed.icsd == icsd)
+        assertMsg "that is not the instrument being financed" (listed.isin == terms.isin)
+        assertMsg "the price is not the one the depository publishes"
+          (terms.price == listed.price)
+
+        assertEligible schedule terms
+        create RepoTrade with seller, buyer = lender, icsd, centralBank, terms
+
+    choice WithdrawProposal : ()
+      controller seller
+      do pure ()
+
+template RepoTrade
+  with
+    seller : Party
+    buyer : Party
+    icsd : Party
+    centralBank : Party
+    terms : RepoTerms
+  where
+    signatory seller, buyer
+
+    ensure termsAreWellFormed terms
+
+    choice SettleOpening : ContractId OpenRepo
+      with
+        collateral : ContractId AllocatedSecurity
+        cash : ContractId AllocatedCash
+        businessDate : ContractId BusinessDate
+      controller buyer
+      do
+
+        valueDate <- fetch businessDate
+        assertMsg "that business date is published by another operator"
+          (valueDate.operator == centralBank)
+        assertMsg "the purchase date has not been opened for settlement yet"
+          (valueDate.current >= terms.purchaseDate)
+
+        hold <- fetch collateral
+        payment <- fetch cash
+
+        assertMsg "the collateral is not the agreed instrument" (hold.isin == terms.isin)
+        assertMsg "the collateral quantity does not match the terms"
+          (hold.quantity == terms.quantity)
+        assertMsg "the collateral is not held by the seller for the buyer"
+          (hold.owner == seller && hold.takenBy == Some buyer && hold.icsd == icsd)
+        assertMsg "the collateral was committed to another instruction"
+          (hold.reference == openingReference terms)
+
+        assertMsg "the cash is not the purchase price"
+          (payment.amount == purchasePrice terms)
+        assertMsg "the cash is in the wrong currency" (payment.currency == terms.currency)
+        assertMsg "the cash is not paid by the buyer to the seller"
+          (payment.owner == buyer && payment.counterparty == seller
+            && payment.centralBank == centralBank)
+        assertMsg "the cash was committed to another instruction"
+          (payment.reference == openingReference terms)
+
+        _ <- exercise collateral DeliverSecurity with newOwner = buyer
+        _ <- exercise cash PayCash
+        create OpenRepo with seller, buyer, icsd, centralBank, terms
+
+    choice CancelTrade : ()
+      controller seller, buyer
+      do pure ()
+
+template OpenRepo
+  with
+    seller : Party
+    buyer : Party
+    icsd : Party
+    centralBank : Party
+    terms : RepoTerms
+  where
+    signatory seller, buyer
+
+    ensure termsAreWellFormed terms
+
+    choice SettleClosing : ()
+      with
+        collateral : ContractId AllocatedSecurity
+        cash : ContractId AllocatedCash
+        businessDate : ContractId BusinessDate
+      controller seller
+      do
+        valueDate <- fetch businessDate
+        assertMsg "that business date is published by another operator"
+          (valueDate.operator == centralBank)
+        assertMsg "the repurchase date has not been opened for settlement yet"
+          (valueDate.current >= terms.repurchaseDate)
+
+        hold <- fetch collateral
+        payment <- fetch cash
+
+        assertMsg "the returned collateral is not the agreed instrument"
+          (hold.isin == terms.isin)
+        assertMsg "the returned collateral quantity does not match the terms"
+          (hold.quantity == terms.quantity)
+        assertMsg "the collateral is not held by the buyer for the seller"
+          (hold.owner == buyer && hold.takenBy == Some seller && hold.icsd == icsd)
+        assertMsg "the collateral was committed to another instruction"
+          (hold.reference == closingReference terms)
+
+        assertMsg "the cash is not the repurchase price"
+          (payment.amount == repurchasePrice terms)
+        assertMsg "the cash is in the wrong currency" (payment.currency == terms.currency)
+        assertMsg "the cash is not paid by the seller to the buyer"
+          (payment.owner == seller && payment.counterparty == buyer
+            && payment.centralBank == centralBank)
+        assertMsg "the cash was committed to another instruction"
+          (payment.reference == closingReference terms)
+
+        _ <- exercise collateral DeliverSecurity with newOwner = seller
+        _ <- exercise cash PayCash
+        pure ()
+
+    choice DeclareDefault : ()
+      with
+        businessDate : ContractId BusinessDate
+      controller buyer
+      do
+        valueDate <- fetch businessDate
+        assertMsg "that business date is published by another operator"
+          (valueDate.operator == centralBank)
+        assertMsg "the repurchase date has not passed"
+          (valueDate.current > terms.repurchaseDate)
+        pure ()

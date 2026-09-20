@@ -1,0 +1,129 @@
+module TestClosing where
+
+import DA.Assert ((===))
+import Daml.Script
+
+import Calendar (nextBusinessDay)
+import Cash
+import Custody
+import Fixture
+import Repo
+import Terms
+
+testClosingLegReturnsCollateralAndPaysInterest : Script ()
+testClosingLegReturnsCollateralAndPaysInterest = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  closeRepo m standardTerms open
+
+  sellerBonds' <- freeBonds m.seller
+  sellerBonds' === 10000000.0
+  buyerBonds <- freeBonds m.buyer
+  buyerBonds === 0.0
+
+  buyerCash' <- freeCash m.buyer
+  buyerCash' === 25006115.64
+  sellerCash' <- freeCash m.seller
+  sellerCash' === 1993884.36
+
+  gone <- queryContractId m.seller open
+  gone === None
+
+testClosingBeforeRepurchaseDateRefused : Script ()
+testClosingBeforeRepurchaseDateRefused = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+
+  (businessDate, _) <- valueDate m
+  [(bonds, _)] <- query @SecurityPosition m.buyer
+  collateral <- submit m.buyer do
+    exerciseCmd bonds AllocateSecurity with
+      allocated = standardTerms.quantity
+      takenBy = Some m.seller
+      reference = closingReference standardTerms
+  funds <- consolidateCash m.seller
+  cash <- submit m.seller do
+    exerciseCmd funds AllocateCash with
+      allocated = repurchasePrice standardTerms
+      counterparty = m.buyer
+      reference = closingReference standardTerms
+  submitMustFail m.seller do
+    exerciseCmd open SettleClosing with
+      collateral = collateral.hold
+      cash = cash.hold
+      businessDate
+  sellerBonds' <- freeBonds m.seller
+  sellerBonds' === 0.0
+
+testClosingWithoutInterestRefused : Script ()
+testClosingWithoutInterestRefused = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  businessDate <- openDay m standardTerms.repurchaseDate
+  [(bonds, _)] <- query @SecurityPosition m.buyer
+  collateral <- submit m.buyer do
+    exerciseCmd bonds AllocateSecurity with
+      allocated = standardTerms.quantity
+      takenBy = Some m.seller
+      reference = closingReference standardTerms
+  funds <- consolidateCash m.seller
+  cash <- submit m.seller do
+    exerciseCmd funds AllocateCash with
+      allocated = purchasePrice standardTerms
+      counterparty = m.buyer
+      reference = closingReference standardTerms
+  submitMustFail m.seller do
+    exerciseCmd open SettleClosing with
+      collateral = collateral.hold
+      cash = cash.hold
+      businessDate
+
+testBuyerCannotSettleClosingLeg : Script ()
+testBuyerCannotSettleClosingLeg = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  businessDate <- openDay m standardTerms.repurchaseDate
+  [(bonds, _)] <- query @SecurityPosition m.buyer
+  collateral <- submit m.buyer do
+    exerciseCmd bonds AllocateSecurity with
+      allocated = standardTerms.quantity
+      takenBy = Some m.seller
+      reference = closingReference standardTerms
+  funds <- consolidateCash m.seller
+  cash <- submit m.seller do
+    exerciseCmd funds AllocateCash with
+      allocated = repurchasePrice standardTerms
+      counterparty = m.buyer
+      reference = closingReference standardTerms
+  submitMustFail m.buyer do
+    exerciseCmd open SettleClosing with
+      collateral = collateral.hold
+      cash = cash.hold
+      businessDate
+
+testDefaultBeforeRepurchaseDateRefused : Script ()
+testDefaultBeforeRepurchaseDateRefused = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  businessDate <- openDay m standardTerms.repurchaseDate
+  submitMustFail m.buyer do exerciseCmd open DeclareDefault with businessDate
+
+testDefaultAfterRepurchaseDateEndsTheAgreement : Script ()
+testDefaultAfterRepurchaseDateEndsTheAgreement = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  businessDate <- openDay m (nextBusinessDay standardTerms.repurchaseDate)
+  submit m.buyer do exerciseCmd open DeclareDefault with businessDate
+  gone <- queryContractId m.seller open
+  gone === None
+  buyerBonds <- freeBonds m.buyer
+  buyerBonds === 10000000.0
+  sellerCash' <- freeCash m.seller
+  sellerCash' === 11677500.0
+
+testSellerCannotDeclareDefault : Script ()
+testSellerCannotDeclareDefault = do
+  m <- setupMarket
+  open <- openRepo m standardTerms
+  businessDate <- openDay m (nextBusinessDay standardTerms.repurchaseDate)
+  submitMustFail m.seller do exerciseCmd open DeclareDefault with businessDate

@@ -1,0 +1,227 @@
+module Fixture where
+
+import DA.Action (foldlA)
+import DA.Date
+import Daml.Script
+
+import Calendar
+import Cash
+import Custody
+import Repo
+import Terms
+
+data Market = Market
+  with
+    icsd : Party
+    centralBank : Party
+    seller : Party
+    buyer : Party
+    bond : ContractId Instrument
+    sellerBonds : ContractId SecurityPosition
+    sellerCash : ContractId CashBalance
+    buyerCash : ContractId CashBalance
+
+demoIsin : Text
+demoIsin = "DE0001102580"
+
+setupMarket : Script Market
+setupMarket = do
+  icsd <- allocateParty "ICSD"
+  centralBank <- allocateParty "CentralBank"
+  seller <- allocateParty "AlphaBank"
+  buyer <- allocateParty "BravoBank"
+
+  bond <- submit icsd do
+    createCmd Instrument with
+      icsd
+      isin = demoIsin
+      issuer = "Federal Republic of Germany"
+      currency = "EUR"
+      price = 98.75
+      observers = [seller, buyer]
+
+  sellerBonds <- submit icsd do
+    exerciseCmd bond Issue with owner = seller, quantity = 10000000.0
+
+  sellerCash <- submit centralBank do
+    createCmd CashBalance with
+      centralBank, owner = seller, currency = "EUR", amount = 2000000.0
+  buyerCash <- submit centralBank do
+    createCmd CashBalance with
+      centralBank, owner = buyer, currency = "EUR", amount = 25000000.0
+
+  _ <- submit centralBank do
+    createCmd BusinessDate with
+      operator = centralBank
+      current = date 2026 Sep 14
+      observers = [icsd, seller, buyer]
+
+  pure Market with ..
+
+standardTerms : RepoTerms
+standardTerms = RepoTerms with
+    tradeId = "REPO-0001"
+    isin = demoIsin
+    quantity = 10000000.0
+    price = 98.75
+    haircut = 0.02
+    currency = "EUR"
+    repoRate = 0.0325
+    tradeDate = date 2026 Sep 14
+    purchaseDate = date 2026 Sep 15
+    repurchaseDate = date 2026 Sep 22
+
+publishPolicy : Market -> Script (ContractId CollateralPolicy)
+publishPolicy m = submit m.buyer do
+  createCmd CollateralPolicy with
+    buyer = m.buyer
+    sellers = [m.seller]
+    icsd = m.icsd
+    centralBank = m.centralBank
+    currency = "EUR"
+    indicativeRate = 0.0325
+    maxCashAmount = 20000000.0
+    validUntil = date 2026 Dec 31
+    eligible =
+      [ EligibleCollateral with
+          isin = demoIsin
+          minHaircut = 0.02
+          maxQuantity = 20000000.0
+      ]
+
+moreBonds : Market -> Decimal -> Script (ContractId SecurityPosition)
+moreBonds m quantity = submit m.icsd do
+  exerciseCmd m.bond Issue with owner = m.seller, quantity
+
+quote : Market -> RepoTerms -> Party -> Script (ContractId RepoProposal)
+quote m terms lender = do
+  committed <- submit m.seller do
+    exerciseCmd m.sellerBonds AllocateSecurity with
+      allocated = terms.quantity
+      takenBy = None
+      reference = openingReference terms
+  submit m.seller do
+    createCmd RepoProposal with
+      seller = m.seller
+      lender
+      icsd = m.icsd
+      centralBank = m.centralBank
+      terms
+      collateral = committed.hold
+
+agreeTrade : Market -> RepoTerms -> Script (ContractId RepoTrade)
+agreeTrade m terms = do
+  policy <- publishPolicy m
+  committed <- submit m.seller do
+    exerciseCmd m.sellerBonds AllocateSecurity with
+      allocated = terms.quantity
+      takenBy = None
+      reference = openingReference terms
+  proposal <- submit m.seller do
+    createCmd RepoProposal with
+      seller = m.seller
+      lender = m.buyer
+      icsd = m.icsd
+      centralBank = m.centralBank
+      terms
+      collateral = committed.hold
+  shown <- holdBehind m proposal
+  submit (actAs m.buyer <> disclose shown) do
+    exerciseCmd proposal AcceptProposal with policy, instrument = m.bond
+
+holdBehind : Market -> ContractId RepoProposal -> Script Disclosure
+holdBehind m offer = do
+  Some proposal <- queryContractId m.seller offer
+  Some shown <- queryDisclosure m.seller proposal.collateral
+  pure shown
+
+freeCash : Party -> Script Decimal
+freeCash owner = do
+  balances <- query @CashBalance owner
+  pure (sum (map (\(_, balance) -> balance.amount) balances))
+
+freeBonds : Party -> Script Decimal
+freeBonds owner = do
+  positions <- query @SecurityPosition owner
+  pure (sum (map (\(_, position) -> position.quantity) positions))
+
+valueDate : Market -> Script (ContractId BusinessDate, Date)
+valueDate m = do
+  [(cid, published)] <- query @BusinessDate m.centralBank
+  pure (cid, published.current)
+
+openDay : Market -> Date -> Script (ContractId BusinessDate)
+openDay m target = do
+  (cid, current) <- valueDate m
+  if current >= target
+    then pure cid
+    else do
+      _ <- submit m.centralBank do
+        exerciseCmd cid RollBusinessDate with next = nextBusinessDay current
+      openDay m target
+
+openRepo : Market -> RepoTerms -> Script (ContractId OpenRepo)
+openRepo m terms = do
+  trade <- agreeTrade m terms
+  businessDate <- openDay m terms.purchaseDate
+
+  [(collateral, _)] <- query @AllocatedSecurity m.seller
+  cash <- submit m.buyer do
+    exerciseCmd m.buyerCash AllocateCash with
+      allocated = purchasePrice terms
+      counterparty = m.seller
+      reference = openingReference terms
+  submit m.buyer do
+    exerciseCmd trade SettleOpening with
+      collateral
+      cash = cash.hold
+      businessDate
+
+consolidateCash : Party -> Script (ContractId CashBalance)
+consolidateCash owner = do
+  balances <- query @CashBalance owner
+  case map fst balances of
+    [] -> abort ("no cash to consolidate for " <> show owner)
+    first :: rest -> foldlA merge first rest
+  where
+    merge accumulated other = submit owner do
+      exerciseCmd accumulated MergeCash with other
+
+closeRepo : Market -> RepoTerms -> ContractId OpenRepo -> Script ()
+closeRepo m terms open = do
+  businessDate <- openDay m terms.repurchaseDate
+  [(bonds, _)] <- query @SecurityPosition m.buyer
+  collateral <- submit m.buyer do
+    exerciseCmd bonds AllocateSecurity with
+      allocated = terms.quantity
+      takenBy = Some m.seller
+      reference = closingReference terms
+  funds <- consolidateCash m.seller
+  cash <- submit m.seller do
+    exerciseCmd funds AllocateCash with
+      allocated = repurchasePrice terms
+      counterparty = m.buyer
+      reference = closingReference terms
+  submit m.seller do
+    exerciseCmd open SettleClosing with
+      collateral = collateral.hold
+      cash = cash.hold
+      businessDate
+
+totalBonds : Market -> Script Decimal
+totalBonds m = do
+  positions <- query @SecurityPosition m.icsd
+  holds <- query @AllocatedSecurity m.icsd
+  pure
+    ( sum (map (\(_, position) -> position.quantity) positions)
+        + sum (map (\(_, hold) -> hold.quantity) holds)
+    )
+
+totalCash : Market -> Script Decimal
+totalCash m = do
+  balances <- query @CashBalance m.centralBank
+  holds <- query @AllocatedCash m.centralBank
+  pure
+    ( sum (map (\(_, balance) -> balance.amount) balances)
+        + sum (map (\(_, hold) -> hold.amount) holds)
+    )

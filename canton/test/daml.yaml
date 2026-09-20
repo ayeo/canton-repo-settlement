@@ -1,0 +1,10 @@
+sdk-version: 3.4.11
+name: repo-test
+source: .
+version: 0.1.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../model/.daml/dist/repo-model-0.1.0.dar
