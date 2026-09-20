@@ -1,0 +1,196 @@
+/* A phosphor read-out: one block per transaction, one line per node. */
+  /* One hue per question, nothing in two groups; brightness carries emphasis. */
+  :root {
+    --bg: #05080a;
+    --panel: #0a1014;
+    --line: #14262c;
+
+    /* What is written - one family, four strengths, no hue of its own. */
+    --ink: #c8ffe0;
+    --dim: #7fd8a8;
+    --faint: #4d7d68;
+    --fainter: #33574a;
+
+    /* Which asset. Grounds and edges only - never ink, never anything else. */
+    --money: #ffb000;
+    --paper: #3fd8ff;
+
+    /* Whose authority. Ink only: who signed or acted, and who was only told. */
+    --signature: #ff8a6b;
+    --audience: #b98cff;
+
+    /* Which way it went. The balance band only. */
+    --gain: #3dff8f;
+    --loss: #ff5c5c;
+
+    /* What did not happen: archived, consumed, refused. */
+    --alarm: #ff5f8f;
+
+    /* What the reader picked. */
+    --select: #eafff5;
+
+    /* The page's own furniture, outside the grid. */
+    --chrome: #ffb000;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; padding: 18px 16px 48px; background: var(--bg); color: var(--ink);
+    font: 15px/1.4 ui-monospace, "SF Mono", Menlo, Consolas,
+          "DejaVu Sans Mono", monospace;
+    letter-spacing: .2px;
+    font-variant-numeric: tabular-nums;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 9;
+    background: repeating-linear-gradient(
+      to bottom, rgba(0,0,0,0) 0 4px, rgba(0,0,0,.07) 4px 6px);
+  }
+  h1 {
+    font-size: 16px; letter-spacing: 2px; text-transform: uppercase;
+    margin: 0 0 2px; color: var(--chrome);
+  }
+  h1::before { content: "\25B6 "; }
+  .sub { color: var(--dim); margin-bottom: 16px; letter-spacing: 1px; font-size: 13px; }
+  .sub::after {
+    content: "\2588"; margin-left: 6px; animation: blink 1.1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .grid { display: grid; gap: 0; border: 1px solid var(--line); background: var(--panel); }
+  .head, .row { display: contents; }
+  .cell {
+    display: flex; flex-direction: column;
+    background: var(--panel); padding: 8px 10px; min-height: 34px;
+    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    overflow-wrap: anywhere;
+  }
+  .head .cell {
+    background: #071216; color: var(--ink); position: sticky; top: 0; z-index: 2;
+    text-transform: uppercase; letter-spacing: 1px; font-size: 12.5px;
+    display: flex; align-items: center; border-bottom: 2px solid var(--line);
+  }
+  .when { color: var(--dim); white-space: nowrap; }
+  .when .ms { display: block; color: var(--faint); font-size: 12.5px; }
+  /* Alternating grounds, so the eye keeps its place across five columns. */
+  .row:nth-child(even) .cell:not(.acted) { background: #0c141a; }
+  .row:hover .cell { background: #0c1a18; }
+  .row.fresh .cell { animation: flash 3.5s ease-out forwards; }
+  @keyframes flash { 0% { background: #10201a; } 100% { background: var(--panel); } }
+
+  /* The node that submitted the transaction reads at full strength; the
+     ones that merely witnessed it recede, so a glance finds the actor. */
+  .cell.acted { background: #0d211b; box-shadow: inset 2px 0 0 var(--signature); }
+  .cell.witnessed .ev .tpl { color: var(--faint); }
+  .cell.witnessed .ev .detail { color: var(--fainter); }
+  .cell.witnessed .ev::before { opacity: .45; }
+
+  .who { display: flex; align-items: center; margin-bottom: 5px; }
+  .actor {
+    color: var(--signature); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+  }
+
+  .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 17px; margin-right: 8px; flex: none;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    border: 1px solid currentColor;
+  }
+
+  /* Wider than the line gap, so a wrapped event stays visibly one event. */
+  .ev { display: block; margin-bottom: 8px; }
+  .ev:last-child { margin-bottom: 0; }
+  .ev.created::before { content: "[+] "; color: var(--ink); }
+  .ev.archived::before, .ev.consumed::before { content: "[-] "; color: var(--alarm); }
+  .ev.exercised::before { content: "[>] "; color: var(--dim); }
+  .ev.refused::before { content: "[x] "; color: var(--alarm); }
+  .ev.refused .tpl { color: var(--alarm); }
+  .row.norecord .cell { background: #170d14; border-bottom-style: dashed; }
+  .row.norecord .cell:first-child { box-shadow: inset 3px 0 0 var(--alarm); }
+  .norecord-note {
+    color: var(--alarm); font-size: 11px; letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .ev .tpl { color: var(--dim); }
+  .ev.root .tpl { color: var(--ink); }
+  .ev .detail { color: var(--dim); }
+  /* Money and paper on their own grounds. */
+  .ev.money {
+    background: rgba(255, 176, 0, .10); box-shadow: -4px 0 0 rgba(255, 176, 0, .28);
+  }
+  .ev.paper {
+    background: rgba(63, 216, 255, .09); box-shadow: -4px 0 0 rgba(63, 216, 255, .26);
+  }
+  .ev.money .tpl, .ev.paper .tpl { color: var(--ink); }
+  .ev.delta::before { content: ""; }
+  /* Balance changes: a band at the foot of the cell, bled over its padding. */
+  .deltas { margin: auto -10px -8px; padding-top: 6px; }
+  .ev.delta {
+    display: block; margin: 0; padding: 6px 10px;
+    border-top: 1px solid #34506e;
+    font-weight: 700; letter-spacing: .3px;
+  }
+  .ev.delta.up {
+    background: linear-gradient(90deg, rgba(61,255,143,.20), rgba(61,255,143,.05));
+    box-shadow: inset 4px 0 0 var(--gain);
+  }
+  .ev.delta.down {
+    background: linear-gradient(90deg, rgba(255,92,92,.22), rgba(255,92,92,.05));
+    box-shadow: inset 4px 0 0 var(--loss);
+  }
+  .ev.delta + .ev.delta { border-top: 1px dotted #24384d; }
+  .ev.delta .amt.up { color: var(--gain); }
+  .ev.delta .amt.down { color: var(--loss); }
+  .ev.delta .tpl { color: var(--dim); font-weight: 400; }
+  .ev .call { color: var(--ink); }
+  .cell.witnessed .ev .call { color: var(--fainter); }
+  /* Clicking a contract marks it on every node that sees it. */
+  .ev.identified { cursor: pointer; }
+  .ev .cid { color: var(--faint); font-size: 12px; letter-spacing: .5px; }
+  /* Everything else recedes - the text only, so who acted stays readable. */
+  .grid.following .ev:not(.followed) .tpl,
+  .grid.following .ev:not(.followed) .detail,
+  .grid.following .ev:not(.followed) .call,
+  .grid.following .ev:not(.followed) .was,
+  .grid.following .ev:not(.followed) .cid { color: var(--fainter); }
+  .grid.following .ev:not(.followed)::before { opacity: .3; }
+  .ev.followed {
+    background: rgba(234, 255, 245, .10); box-shadow: inset 0 0 0 1px var(--select);
+  }
+  .ev.followed .tpl, .ev.followed .cid { color: var(--select); }
+  .cell.witnessed .ev.followed .tpl { color: var(--select); }
+  /* Where the followed contract was created. */
+  .ev.followed.created {
+    background: rgba(234, 255, 245, .16);
+    box-shadow: inset 0 0 0 1px var(--select), inset 6px 0 0 var(--select);
+  }
+  .ev.followed.created .tpl,
+  .ev.followed.created .cid { color: var(--select); }
+  /* Witnessing nodes get an outline; only the submitter's copy is highlighted. */
+  .cell.witnessed .ev.followed {
+    box-shadow: none; outline: 1px dashed var(--select);
+    background: rgba(234, 255, 245, .06);
+  }
+  .cell.witnessed .ev.followed.created .tpl,
+  .cell.witnessed .ev.followed.created .cid { color: var(--select); }
+  .ev .was { color: var(--faint); }
+  .ev .why { color: var(--alarm); }
+  /* The net row: a heavier rule, and cells that do not recede. */
+  .row.totals .cell {
+    background: #071216; border-top: 2px solid var(--line); padding-top: 10px;
+  }
+  .row.totals .when { color: var(--ink); text-transform: uppercase; letter-spacing: 1px; }
+  .row.totals .ev.delta { margin: 0 -10px; }
+  .row.totals .ev.delta + .ev.delta { border-top: 1px dotted #24384d; }
+  .cell.witnessed .ev.followed .cid { opacity: 1; }
+  #following {
+    color: var(--select); letter-spacing: 1px; font-size: 12px;
+    text-transform: uppercase; margin: -12px 0 14px; min-height: 16px;
+  }
+  /* Signatories and observers: why this node has the contract at all. */
+  .ev .who { color: var(--signature); }
+  .ev .watching { color: var(--audience); }
+  .cell.witnessed .ev .who,
+  .cell.witnessed .ev .watching { opacity: .55; }
+  .ev.under { border-left: 1px dashed var(--line); padding-left: 8px; }
+  .none { color: var(--faint); }

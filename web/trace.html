@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Repo settlement, as each node saw it</title>
+<!--
+  The stylesheet and the script are loaded with a fresh query string every
+  time. A read-out that is edited while somebody is looking at it is worth
+  one extra round trip: a browser serving yesterday's script from its cache
+  looks exactly like a feature that does not work.
+-->
+<script>
+  window.assetVersion = '?t=' + Date.now();
+  document.write(
+    '<link rel="stylesheet" href="trace.css' + window.assetVersion + '">');
+</script>
+</head>
+<body>
+<h1>repo settlement :: per-node ledger read-out</h1>
+<div class="sub" id="summary">reading trace.json…</div>
+<div id="following"></div>
+
+<div id="grid"></div>
+
+<script>
+  document.write('<script src="trace.js' + window.assetVersion + '"><\/script>');
+</script>
+</body>
+</html>
