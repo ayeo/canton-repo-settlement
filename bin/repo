@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# One command for every institution. See: repo --help
+set -euo pipefail
+here="$(cd "$(dirname "$0")/.." && pwd)"
+jar="$here/app/target/repo-cli.jar"
+
+if [ ! -f "$jar" ]; then
+  echo "the command line is not built yet - run: make cli" >&2
+  exit 1
+fi
+
+cd "$here"
+
+exec "$here/scripts/with-java21.sh" java -jar "$jar" "$@"

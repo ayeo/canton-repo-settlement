@@ -1,0 +1,28 @@
+{
+    "files.readonlyInclude": {
+        "**/.daml/unpacked-dars/**": true
+    },
+
+    // The Java language server runs Maven on its own and would otherwise pick
+    // up the global ~/.m2/settings.xml, which routes every artifact to a
+    // private CodeArtifact repository (401). Point it at the project's
+    // settings - the same file app/.mvn/maven.config handles for the CLI.
+    "java.configuration.maven.userSettings": "app/settings.xml",
+    "java.configuration.updateBuildConfiguration": "automatic",
+
+    // Google Java Style (google/styleguide eclipse-java-google-style.xml):
+    // two-space indent; lines up to 200 columns, and a call that does not fit gets
+    // one argument per line with the closing parenthesis on its own line.
+    "java.format.settings.url": ".vscode/java-formatter.xml",
+    "java.format.settings.profile": "GoogleStyle",
+    "java.completion.importOrder": ["#", ""],
+    "[java]": {
+        "editor.defaultFormatter": "redhat.java",
+        "editor.formatOnSave": true,
+        // Only what was changed, so saving a file does not reformat all of it.
+        "editor.formatOnSaveMode": "modificationsIfAvailable",
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.rulers": [200]
+    }
+}
