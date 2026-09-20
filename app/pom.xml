@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>pl.ayeo</groupId>
+  <artifactId>repo-app</artifactId>
+  <version>0.1.0</version>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>21</maven.compiler.release>
+    <daml.version>3.4.11</daml.version>
+    <!-- Also set in canton/model/daml.yaml, so a manual "daml codegen java" writes here too. -->
+    <codegen.output>${project.build.directory}/generated-sources/repo</codegen.output>
+    <model.dar>${project.basedir}/../canton/model/.daml/dist/repo-model-0.1.0.dar</model.dar>
+    <model.package.prefix>pl.ayeo.repo.model</model.package.prefix>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.daml</groupId>
+      <artifactId>bindings-java</artifactId>
+      <version>${daml.version}</version>
+      <exclusions>
+        <!-- Collides with the full protobuf-java that gRPC pulls in. -->
+        <exclusion>
+          <groupId>com.google.protobuf</groupId>
+          <artifactId>protobuf-lite</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>1.3.12</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.15.4</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+      <version>2.15.4</version>
+    </dependency>
+    <dependency>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
+      <version>4.7.6</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <id>add-codegen-sources</id>
+            <phase>generate-sources</phase>
+            <goals><goal>add-source</goal></goals>
+            <configuration>
+              <sources><source>${codegen.output}</source></sources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+
+        <!-- Codegen runs from com.daml:codegen-java rather than the "daml" CLI,
+             so "mvn compile" (or an IDE) builds the project on its own. -->
+        <dependencies>
+          <dependency>
+            <groupId>com.daml</groupId>
+            <artifactId>codegen-java</artifactId>
+            <version>${daml.version}</version>
+          </dependency>
+        </dependencies>
+
+        <executions>
+          <execution>
+            <id>daml-codegen</id>
+            <phase>generate-sources</phase>
+            <goals><goal>java</goal></goals>
+            <configuration>
+              <mainClass>com.digitalasset.daml.lf.codegen.StandaloneMain</mainClass>
+              <includePluginDependencies>true</includePluginDependencies>
+              <includeProjectDependencies>false</includeProjectDependencies>
+              <arguments>
+                <argument>${model.dar}=${model.package.prefix}</argument>
+                <argument>-o</argument>
+                <argument>${codegen.output}</argument>
+              </arguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- One jar, so "repo" starts without Maven and works outside this directory. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <finalName>repo-cli</finalName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>pl.ayeo.repo.cli.Cli</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
